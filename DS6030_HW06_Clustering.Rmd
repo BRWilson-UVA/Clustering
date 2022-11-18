@@ -1,0 +1,253 @@
+---
+title: "Homework #6: Clustering" 
+author: "Ben Wilson"
+date: "Due: Wed Oct 19 | 11:45am"
+output: 
+  pdf_document:
+    toc: yes
+  html_document:
+    theme: cosmo
+    toc: yes
+    toc_float: yes
+editor_options:
+  chunk_output_type: inline
+---
+
+**DS 6030 | Fall 2021 | University of Virginia**
+
+------------------------------------------------------------------------
+
+```{r config, echo=FALSE}
+#set up R
+source(system.file("config/hw_config.R", package="R6030")) # knitr settings
+options(dplyr.summarise.inform = FALSE)  # ignore dplyr message about grouping
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Required R packages and Directories
+
+```{r packages, message=FALSE, warning=FALSE}
+data.dir = 'https://mdporter.github.io/DS6030/data/' # data directory
+library(R6030)     # functions for DS-6030
+library(tidyverse) # functions for data manipulation   
+library(mclust)    # functions for mixture models
+library(mixtools)  # poisregmixEM() function
+library(dplyr)
+library(broom)
+library(mclust)
+```
+
+
+# Problem 1: Customer Segmentation with RFM (Recency, Frequency, and Monetary Value)
+
+RFM analysis is an approach that some businesses use to understand their customers' activities. At any point in time, a company can measure how recently a customer purchased a product (Recency), how many times they purchased a product (Frequency), and how much they have spent (Monetary Value). There are many ad-hoc attempts to segment/cluster customers based on the RFM scores (e.g., here is one based on using the customers' rank of each dimension independently: <https://joaocorreia.io/blog/rfm-analysis-increase-sales-by-segmenting-your-customers.html>). In this problem you will use the clustering methods we covered in class to segment the customers. 
+
+
+The data for this problem can be found here. Cluster based on the Recency, Frequency, and Monetary value columns.
+```{r}
+#load data
+rfm_data <- read.csv("C:\\Users\\brwil\\Desktop\\SY MSDS\\DS 6030 Stat Learning\\Week 7\\RFM.csv", header=TRUE,stringsAsFactors=FALSE)
+```
+
+
+## a. Implement hierarchical clustering. 
+
+- Describe any pre-processing steps you took (e.g., scaling, distance metric)
+- State the linkage method you used with justification. 
+- Show the resulting dendrogram
+- State the number of segments/clusters you used with justification. 
+- Using your segmentation, are customers 1 and 100 in the same cluster?     
+    
+Extract features and scale
+```{r}
+#extract features
+rfm_dataX = dplyr::select(rfm_data, Recency, Frequency, Monetary)
+
+#scale dataset
+scaled_data = scale(rfm_dataX)
+
+#calculate euclidean distance
+dX = dist(scaled_data, method = "euclidean")
+
+```
+
+Identify optimal linkage
+```{r}
+#use average linkage
+hc_avg = hclust(dX, method = "average")
+plot(hc_avg)
+
+#use complete linkage
+hc_com = hclust(dX, method = "complete")
+plot(hc_com)
+
+#use single linkage
+hc_sin = hclust(dX, method = "single")
+plot(hc_sin)
+
+#use ward linkage
+hc_war = hclust(dX, method = "ward.D2")
+plot(hc_war)
+
+#use centroid linkage
+hc_cen = hclust(dX, method = "centroid")
+plot(hc_cen)
+```
+Identify optimal k
+```{r}
+#elbow method for optimal cluster 
+tibble(height = hc_war$height, K = row_number(-height)) %>%
+  ggplot(aes(K, height)) +
+  geom_line() +
+  geom_point(aes(color = ifelse(K == 9, "red", "black"))) +
+  scale_color_identity() +
+  coord_cartesian(xlim=c(1, 40))
+```
+
+Cut tree
+```{r}
+cutree(hc_war, k = 9) %>% table()
+```
+
+As part of pre-processing, ID was removed for the X values and the results were scaled so that the columns all had equal variance. Additionally, Euclidian distance was used to assign the observations to the nearest centroid. In comparing linkage types, Ward had the clearest cluster groupings and, upon being chosen, the optimal cluster number using the elbow method was found at K = 9.
+
+```{r}
+fit = kmeans(scaled_data, centers = 9, nstart = 100)
+
+augment(fit, scaled_data)
+
+```
+
+Finally, customer 1 resides within cluster 1 whereas customer 100 resides within cluster 4.
+
+## b. Implement k-means.  
+
+- Describe any pre-processing steps you took (e.g., scaling)
+- State the number of segments/clusters you used with justification. 
+- Using your segmentation, are customers 1 and 100 in the same cluster?     
+
+```{r}
+#-- Run kmeans for multiple K
+Kmax = 10 # maximum K
+SSE = numeric(Kmax) # initiate SSE vector
+set.seed(2022) # set seed for reproducibility
+for(k in 1:Kmax){
+  km = kmeans(scaled_data, centers=k, nstart=25) # use 25 initializations
+  SSE[k] = km$tot.withinss # get SSE
+}
+
+#plot results
+tibble(K = 1:Kmax, SSE) %>%
+  ggplot(aes(K, SSE)) + geom_line() + geom_point() +
+  scale_x_continuous(breaks = 1:Kmax) +
+  labs(title = "K-means for RFM Data")
+```
+
+```{r}
+fit = kmeans(scaled_data, centers = 4, nstart = 100)
+
+augment(fit, scaled_data)
+```
+
+As part of pre-processing, ID was removed for the X values and the results were scaled so that the columns all had equal variance similar to the hierarchical clustering. Additionally, 4 clusters were chosen using the elbow method which was not as clear as the prior elbow method used so 5 clusters could have an argument to choose as well.
+
+Finally, customers 1 and 100 were compared using the augment function. Customer 1 resides within cluster 4 whereas customer 100 resides within cluster 2.
+
+## c. Implement model-based clustering
+
+- Describe any pre-processing steps you took (e.g., scaling)
+- State the number of segments/clusters you used with justification. 
+- Describe the best model. What restrictions are on the shape of the components?
+- Using your segmentation, are customers 1 and 100 in the same cluster?     
+
+```{r}
+#fit series of models for K's
+mix = Mclust(scaled_data, verbose = FALSE)
+```
+
+```{r}
+#summarize clusters
+summary(mix)
+
+#visualize results
+plot(mix, what="BIC")
+plot(mix, what="classification")
+plot(mix, what="uncertainty")
+plot(mix, what="density")
+```
+Utilizing the scaled data without the ID from the prior clustering problems, the optimal cluster number is 7, which falls between the prior number of clusters chosen (4 and 9). The model-based clustering eases the prior restrictions allowing to fit the non-spherical clusters of varying sizes and variances. Those clusters built between recency and frequency are the most spherical clusters although those built with monetary are more elongated, showing the non spherical nature.
+
+```{r}
+augment(mix, scaled_data)
+```
+
+Customer 1 resides within cluster 2 while Customer 100 resides within cluster 6.
+
+
+## d. Discuss how you would cluster the customers if you had to do this for your job. Do you think one model would do better than the others? 
+I would leverage the model based clustering. Although they are all assigning the observations to the nearest centroid (based on Euclidean distance), K-means may only find local solutions, and hierarchical clustering we need to make a number of decisions along the way in terms of number of clusters and linkage. Model-based clustering, at least initially, helps us get a baseline to work from and then can iterate to finese the clusters.
+
+
+# Problem 2: Poisson Mixture Model
+
+## a. What are the parameters of the model? 
+
+Parameters of the Poisson mixture model are lambda 1, lambda 2 and theta
+
+## b. Write down the log-likelihood for n independent observations. 
+
+```{r}
+#insert picture of math derivation
+knitr::include_graphics('C:/Users/brwil/Desktop/SY MSDS/DS 6030 Stat Learning/Week 7/2b_loglikelihood.jpg')
+
+```
+
+## c. Suppose we have initial values of the parameters. Write down the equation for updating the *responsibilities*. 
+```{r}
+#insert picture of math derivation
+knitr::include_graphics('C:/Users/brwil/Desktop/SY MSDS/DS 6030 Stat Learning/Week 7/2c_update_responsibilities.jpg')
+
+```
+
+
+
+## d. Suppose we have responsibilities. Write down the equations for updating the parameters. 
+```{r}
+#insert picture of math derivation
+knitr::include_graphics('C:/Users/brwil/Desktop/SY MSDS/DS 6030 Stat Learning/Week 7/2d_update_parameters.jpg')
+
+```
+
+
+
+## e. Fit a two-component Poisson mixture model, report the estimated parameter values, and show a plot of the estimated mixture pmf for the following data:
+
+```{r, echo=TRUE}
+#-- Run this code to generate the data
+set.seed(123)             # set seed for reproducibility
+n = 200                   # sample size
+z = sample(1:2, size=n, replace=TRUE, prob=c(.25, .75)) # sample the latent class
+theta = c(8, 16)          # true parameters
+y = ifelse(z==1, rpois(n, lambda=theta[1]), rpois(n, lambda=theta[2]))
+```
+
+Fit two component Poisson mixture model
+```{r}
+x = rep(1, length(y))
+
+mix = poisregmixEM(y, x, addintercept = FALSE)
+```
+
+Report estimated parameter values
+```{r}
+summary(mix, parameters=TRUE)
+```
+
+Plot of estimated mixture pmf
+```{r}
+plot(mix)
+```
+
+
+
